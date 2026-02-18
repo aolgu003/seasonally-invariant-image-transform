@@ -152,3 +152,260 @@ Grid origins (col × row):
 ```
 
 ---
+
+## `siamese-ncc.py`
+
+Trains the U-Net model to produce seasonally-invariant image transforms optimized via normalized cross-correlation (NCC).
+
+```mermaid
+graph TB
+    User["User"]
+
+    subgraph NCC ["siamese-ncc.py"]
+        direction TB
+
+        UC_main(["Train NCC Model"])
+
+        subgraph required ["Required Arguments"]
+            UC_expname(["Specify Experiment Name\n─────────────────\n--exp_name"])
+            UC_traindir(["Specify Training Data Dir\n─────────────────\n--training_data_dir"])
+            UC_valdir(["Specify Validation Data Dir\n─────────────────\n--validation_data_dir"])
+        end
+
+        subgraph optional ["Optional Arguments (have defaults)"]
+            UC_epochs(["Set Epoch Count\n─────────────────\n--epochs\ndefault: 100"])
+            UC_batch(["Set Batch Size\n─────────────────\n--batch-size\ndefault: 4"])
+            UC_device(["Set GPU Device\n─────────────────\n--device\ndefault: 0"])
+            UC_workers(["Set DataLoader Workers\n─────────────────\n--num_workers\ndefault: 4"])
+            UC_negw(["Set Negative Sample Ratio\n─────────────────\n--negative_weighting_train\ndefault: 0.5"])
+            UC_prop(["Set Dataset Proportion\n─────────────────\n--train_proportion\ndefault: 1.0"])
+        end
+
+        subgraph behavior ["System Behavior"]
+            UC_load(["Load Siamese Dataset\n(on/off pairs with\nnegative sampling)"])
+            UC_model(["Initialize U-Net\n(1-ch in, 1-ch out)"])
+            UC_trainloop(["Run Train/Eval Loop\nper Epoch"])
+            UC_ncc(["Compute NCC Score\n& MSE Loss"])
+            UC_savebest(["Save Best Weights\nbest_test_weights.pt\nbest_train_weights.pt"])
+            UC_tb(["Log Metrics\nto TensorBoard"])
+        end
+    end
+
+    User -->|initiates| UC_main
+
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_expname
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_traindir
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_valdir
+
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_epochs
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_batch
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_device
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_workers
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_negw
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_prop
+
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_load
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_model
+    UC_model -->|"&lt;&lt;include&gt;&gt;"| UC_trainloop
+    UC_trainloop -->|"&lt;&lt;include&gt;&gt;"| UC_ncc
+    UC_trainloop -->|"&lt;&lt;include&gt;&gt;"| UC_savebest
+    UC_trainloop -->|"&lt;&lt;include&gt;&gt;"| UC_tb
+    UC_negw -->|informs| UC_load
+    UC_prop -->|informs| UC_load
+    UC_epochs -->|controls| UC_trainloop
+    UC_batch -->|controls| UC_load
+```
+
+### Key Behaviors
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--exp_name` | Yes | — | Experiment name; outputs go to `experiments/{exp_name}/` and `runs/{exp_name}/` |
+| `--training_data_dir` | Yes | — | Root dir with `on/` and `off/` season subdirectories for training |
+| `--validation_data_dir` | Yes | — | Root dir with `on/` and `off/` season subdirectories for validation |
+| `--epochs` | No | `100` | Number of full passes over the training data |
+| `--batch-size` | No | `4` | Images per gradient update |
+| `--device` | No | `0` | CUDA device index or `cpu` |
+| `--num_workers` | No | `4` | DataLoader worker processes |
+| `--negative_weighting_train` | No | `0.5` | Fraction of mismatched (negative) pairs in training batches |
+| `--train_proportion` | No | `1.0` | Fraction of the dataset to use |
+
+**Loss function:** MSE between predicted NCC score and label (`1` = matching pair, `0` = mismatched pair).
+**Optimizer:** Adam (`lr=1e-5`) with ExponentialLR scheduler (`gamma=0.995`).
+**Outputs:** `experiments/{exp_name}/weights/best_test_weights.pt` and `best_train_weights.pt`.
+
+---
+
+## `siamese-sift.py`
+
+Trains the U-Net model using a combined SIFT detector + descriptor loss optimized over multi-scale DoG pyramids.
+
+```mermaid
+graph TB
+    User["User"]
+
+    subgraph SIFT ["siamese-sift.py"]
+        direction TB
+
+        UC_main(["Train SIFT Model"])
+
+        subgraph required ["Required Arguments"]
+            UC_expname(["Specify Experiment Name\n─────────────────\n--exp_name"])
+            UC_traindir(["Specify Training Data Dir\n─────────────────\n--training_data_dir"])
+            UC_valdir(["Specify Validation Data Dir\n─────────────────\n--validation_data_dir"])
+        end
+
+        subgraph optional ["Optional Arguments (have defaults)"]
+            UC_epochs(["Set Epoch Count\n─────────────────\n--epochs\ndefault: 100"])
+            UC_batch(["Set Batch Size\n─────────────────\n--batch-size\ndefault: 2"])
+            UC_device(["Set GPU Device\n─────────────────\n--device\ndefault: 0"])
+            UC_workers(["Set DataLoader Workers\n─────────────────\n--num_workers\ndefault: 2"])
+            UC_zeta(["Set Descriptor Loss Weight\n─────────────────\n--zeta\ndefault: 10"])
+            UC_gamma(["Set Detector Loss Weight\n─────────────────\n--gamma\ndefault: 1"])
+            UC_subs(["Set Subsample Count\n─────────────────\n--subsamples\ndefault: 100"])
+            UC_crop(["Set Pyramid Crop Width\n─────────────────\n--crop_width\ndefault: 64 px"])
+        end
+
+        subgraph behavior ["System Behavior"]
+            UC_load(["Load Siamese Dataset\n(on/off pairs)"])
+            UC_model(["Initialize U-Net\n(1-ch in, 1-ch out)"])
+            UC_trainloop(["Run Train/Eval Loop\nper Epoch"])
+            UC_pyr(["Compute DoG Pyramid\nCorrelation Loss"])
+            UC_desc(["Detect SIFT Keypoints\n& Compute Descriptor Loss"])
+            UC_combined(["Combine Losses\ngamma×sift + zeta×pyramid"])
+            UC_savebest(["Save Best Weights\nbest_test_weights.pt\nbest_train_weights.pt"])
+            UC_tb(["Log Metrics\nto TensorBoard"])
+        end
+    end
+
+    User -->|initiates| UC_main
+
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_expname
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_traindir
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_valdir
+
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_epochs
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_batch
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_device
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_workers
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_zeta
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_gamma
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_subs
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_crop
+
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_load
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_model
+    UC_model -->|"&lt;&lt;include&gt;&gt;"| UC_trainloop
+    UC_trainloop -->|"&lt;&lt;include&gt;&gt;"| UC_pyr
+    UC_trainloop -->|"&lt;&lt;include&gt;&gt;"| UC_desc
+    UC_pyr -->|"&lt;&lt;include&gt;&gt;"| UC_combined
+    UC_desc -->|"&lt;&lt;include&gt;&gt;"| UC_combined
+    UC_combined -->|"&lt;&lt;include&gt;&gt;"| UC_savebest
+    UC_combined -->|"&lt;&lt;include&gt;&gt;"| UC_tb
+    UC_zeta -->|scales| UC_combined
+    UC_gamma -->|scales| UC_combined
+    UC_subs -->|controls| UC_pyr
+    UC_crop -->|controls| UC_pyr
+    UC_epochs -->|controls| UC_trainloop
+    UC_batch -->|controls| UC_load
+```
+
+### Key Behaviors
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--exp_name` | Yes | — | Experiment name; outputs go to `experiments/{exp_name}/` and `runs/{exp_name}/` |
+| `--training_data_dir` | Yes | — | Root dir with `on/` and `off/` season subdirectories for training |
+| `--validation_data_dir` | Yes | — | Root dir with `on/` and `off/` season subdirectories for validation |
+| `--epochs` | No | `100` | Number of full passes over the training data |
+| `--batch-size` | No | `2` | Images per gradient update |
+| `--device` | No | `0` | CUDA device index or `cpu` |
+| `--num_workers` | No | `2` | DataLoader worker processes |
+| `--zeta` | No | `10` | Weight applied to the DoG pyramid (descriptor) loss component |
+| `--gamma` | No | `1` | Weight applied to the SIFT keypoint (detector) loss component |
+| `--subsamples` | No | `100` | Number of random pyramid crop pairs sampled per batch for pyramid loss |
+| `--crop_width` | No | `64` | Side length (px) of the square crop used in pyramid loss computation |
+
+**Loss function:** `gamma × sift_descriptor_loss + zeta × pyramid_correlation_loss`.
+**Optimizer:** Adam (`lr=1e-5`) with ExponentialLR scheduler (`gamma=0.99`).
+**Outputs:** `experiments/{exp_name}/weights/best_test_weights.pt` and `best_train_weights.pt`.
+
+---
+
+## `siamese-inference.py`
+
+Runs a trained U-Net model over input images and writes the seasonally-invariant transformed outputs to disk.
+
+```mermaid
+graph TB
+    User["User"]
+
+    subgraph INF ["siamese-inference.py"]
+        direction TB
+
+        UC_main(["Run Inference"])
+
+        subgraph required ["Required Arguments"]
+            UC_datadir(["Specify Input Path\n─────────────────\n--data_dir"])
+            UC_outdir(["Specify Output Directory\n─────────────────\n--output_dir"])
+            UC_weights(["Specify Weights File\n─────────────────\n--weights_path"])
+        end
+
+        subgraph optional ["Optional Arguments (have defaults)"]
+            UC_batch(["Set Batch Size\n─────────────────\n--batch-size\ndefault: 1"])
+            UC_device(["Set GPU Device\n─────────────────\n--device\ndefault: 0"])
+            UC_workers(["Set DataLoader Workers\n─────────────────\n--num_workers\ndefault: 1"])
+            UC_mean(["Set Normalisation Mean\n─────────────────\n--mean\ndefault: 0.4"])
+            UC_std(["Set Normalisation Std\n─────────────────\n--std\ndefault: 0.12"])
+        end
+
+        subgraph behavior ["System Behavior"]
+            UC_load(["Load Input Images\nfrom data_dir"])
+            UC_model(["Load U-Net Weights\nfrom weights_path"])
+            UC_forward(["Run Forward Pass\n(no gradient)"])
+            UC_save(["Save Transformed Images\nto output_dir"])
+        end
+    end
+
+    User -->|initiates| UC_main
+
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_datadir
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_outdir
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_weights
+
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_batch
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_device
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_workers
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_mean
+    UC_main -. "&lt;&lt;extend&gt;&gt;" .-> UC_std
+
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_load
+    UC_main -->|"&lt;&lt;include&gt;&gt;"| UC_model
+    UC_load -->|"&lt;&lt;include&gt;&gt;"| UC_forward
+    UC_model -->|"&lt;&lt;include&gt;&gt;"| UC_forward
+    UC_forward -->|"&lt;&lt;include&gt;&gt;"| UC_save
+    UC_mean -->|normalises| UC_load
+    UC_std -->|normalises| UC_load
+    UC_batch -->|controls| UC_load
+    UC_weights -->|loads from| UC_model
+    UC_outdir -->|writes to| UC_save
+```
+
+### Key Behaviors
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--data_dir` | Yes | — | Path to input image or directory of images to transform |
+| `--output_dir` | Yes | — | Directory where transformed PNG files will be written (created if absent) |
+| `--weights_path` | Yes | — | Path to a `.pt` state-dict file produced by `siamese-ncc.py` or `siamese-sift.py` |
+| `--batch-size` | No | `1` | Images processed per forward pass |
+| `--device` | No | `0` | CUDA device index or `cpu` |
+| `--num_workers` | No | `1` | DataLoader worker processes |
+| `--mean` | No | `0.4` | Per-channel mean used to normalise input images |
+| `--std` | No | `0.12` | Per-channel standard deviation used to normalise input images |
+
+**Mode:** Evaluation only (`torch.no_grad()` + `model.eval()`). No weights are updated.
+**Output filenames:** Preserved from input (same basename, `.png` extension).
+**Side effect:** `output_dir` is created automatically if it does not exist.
+
+---
