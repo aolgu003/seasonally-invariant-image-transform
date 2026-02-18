@@ -31,3 +31,59 @@ jobs:
 
       - name: Run tests with pytest
         run: pytest
+
+  render-diagrams:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Use GITHUB_TOKEN so the bot can push rendered PNGs back
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install mermaid-cli
+        # Skip Puppeteer's bundled Chrome download — we use the runner's Chrome
+        run: PUPPETEER_SKIP_DOWNLOAD=true npm install -g @mermaid-js/mermaid-cli
+
+      - name: Create Puppeteer config
+        run: |
+          echo '{
+            "args": [
+              "--no-sandbox",
+              "--disable-setuid-sandbox",
+              "--disable-dev-shm-usage"
+            ]
+          }' > /tmp/puppeteer-config.json
+
+      - name: Render diagrams
+        run: bash scripts/render-diagrams.sh
+        env:
+          MMDC: mmdc
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
+          PUPPETEER_CONFIG: /tmp/puppeteer-config.json
+          SCALE: "3"
+          WIDTH: "2400"
+          HEIGHT: "1600"
+
+      - name: Commit rendered diagrams
+        # Only commit on push events (not on pull_request) to avoid write
+        # permission issues on forks. [skip ci] prevents a render loop.
+        if: github.event_name == 'push'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/diagrams/
+          if git diff --staged --quiet; then
+            echo "Diagrams unchanged — nothing to commit."
+          else
+            git commit -m "chore: re-render mermaid diagrams [skip ci]"
+            git push
+          fi
