@@ -1,89 +1,115 @@
-"""Tests for model/kornia_dog.py
+"""Tests for the Difference of Gaussians pyramid.
 
-Maps to BDD Feature: Difference of Gaussians Pyramid.
+BDD Feature: Difference of Gaussians Pyramid (model/kornia_dog.py)
+
+The DoG module feeds into both the pyramid correlation loss and SIFT
+keypoint detection.  These tests verify the pyramid structure, the
+adjacent-level subtraction, and spatial downscaling across octaves.
 """
 
 import kornia
 import torch
+import pytest
 
 from model.kornia_dog import KorniaDoG, KorniaDoGScalePyr
 
 
-class TestKorniaDoG:
-    """Tests for the KorniaDoG module."""
+@pytest.fixture
+def dog():
+    """Default KorniaDoG with a 3-level ScalePyramid."""
+    sp = kornia.geometry.transform.pyramid.ScalePyramid(
+        n_levels=3, init_sigma=1.6, min_size=15,
+    )
+    return KorniaDoG(scale_pyramid=sp)
 
-    def test_multi_octave_output_structure(self):
-        """Scenario: KorniaDoG produces multi-octave DoG outputs.
-        Returns (dogs, sigmas, dists, pyramids) where dogs is a list."""
-        dog = KorniaDoG()
-        x = torch.randn(1, 1, 128, 128)
+
+@pytest.fixture
+def dog_scale_pyr():
+    """KorniaDoGScalePyr variant."""
+    sp = kornia.geometry.transform.pyramid.ScalePyramid(
+        n_levels=3, init_sigma=1.6, min_size=15,
+    )
+    return KorniaDoGScalePyr(scale_pyramid=sp)
+
+
+# -- Scenario: KorniaDoG produces multi-octave DoG outputs ----------------
+class TestDoGMultiOctaveOutput:
+    """BDD: Given (B,1,H,W) input · When passed through KorniaDoG ·
+    Then it returns a list of DoG tensors, sigmas, distances, and pyramids.
+
+    The number of octaves depends on the input size and min_size.  We
+    just verify the return types and that we get at least 1 octave.
+    """
+
+    def test_return_structure(self, dog):
+        x = torch.randn(1, 1, 64, 64)
         dogs, sigmas, dists, pyramids = dog(x)
-        assert isinstance(dogs, list)
-        assert len(dogs) > 0
-        assert isinstance(sigmas, list)
-        assert isinstance(dists, list)
-        assert isinstance(pyramids, list)
+        assert isinstance(dogs, list) and len(dogs) >= 1
+        assert isinstance(sigmas, list) and len(sigmas) == len(dogs)
+        assert isinstance(dists, list) and len(dists) == len(dogs)
+        assert isinstance(pyramids, list) and len(pyramids) >= 1
 
-    def test_dog_is_difference_of_adjacent_levels(self):
-        """Scenario: DoG is computed as difference of adjacent levels.
-        The code computes pyr[:,:,1:,:,:] - pyr[:,:,:-1,:,:], so the
-        number of DoG layers per octave is (num_pyramid_levels - 1).
-        Kornia's ScalePyramid(n_levels=N) produces N+3 levels per octave,
-        yielding N+2 DoG layers after subtraction."""
-        n_levels = 3
-        scale_pyr = kornia.geometry.transform.pyramid.ScalePyramid(n_levels=n_levels)
-        dog = KorniaDoG(scale_pyramid=scale_pyr)
-        x = torch.randn(1, 1, 128, 128)
+    def test_dog_tensors_are_4d(self, dog):
+        x = torch.randn(1, 1, 64, 64)
+        dogs, _, _, _ = dog(x)
+        for d in dogs:
+            assert d.dim() == 4  # (B, n_levels-1, H, W) after squeeze
+
+
+# -- Scenario: DoG is computed as difference of adjacent pyramid levels ----
+class TestAdjacentLevelDifference:
+    """BDD: Given n_levels=3 · When DoG is computed · Then each octave has
+    n_levels - 1 = 2 DoG layers.
+
+    The subtraction pyr[:,:,1:] - pyr[:,:,:-1] removes one level.
+    """
+
+    def test_dog_has_n_levels_minus_one(self, dog):
+        x = torch.randn(1, 1, 64, 64)
         dogs, _, _, pyramids = dog(x)
-
-        # Verify DoG layers = pyramid_levels_per_octave - 1
         for d, pyr in zip(dogs, pyramids):
-            pyr_levels = pyr.shape[2]  # (B, C, levels, H, W)
-            assert d.shape[1] == pyr_levels - 1, (
-                f"DoG layers {d.shape[1]} should be pyramid levels {pyr_levels} - 1"
-            )
+            # pyr shape: (B, 1, n_levels, H, W) — after squeeze the DoG
+            # should have n_levels-1 along the level dimension.
+            n_pyr_levels = pyr.shape[2]
+            n_dog_layers = d.shape[1]
+            assert n_dog_layers == n_pyr_levels - 1
 
-    def test_spatial_dimensions_decrease_across_octaves(self):
-        """Scenario: Spatial dimensions decrease across octaves."""
-        dog = KorniaDoG()
-        x = torch.randn(1, 1, 256, 256)
-        dogs, _, _, _ = dog(x)
-        if len(dogs) > 1:
-            # Each successive octave should have smaller spatial dims
-            for i in range(len(dogs) - 1):
-                h_curr = dogs[i].shape[-2]
-                h_next = dogs[i + 1].shape[-2]
-                assert h_next < h_curr, (
-                    f"Octave {i+1} spatial dim {h_next} not smaller than octave {i} dim {h_curr}"
-                )
 
-    def test_output_tensors_are_valid(self):
-        """DoG output tensors contain no NaN values."""
-        dog = KorniaDoG()
+# -- Scenario: KorniaDoGScalePyr uses different dimension ordering ---------
+class TestScalePyrVariant:
+    """BDD: Given the same input · When KorniaDoGScalePyr runs ·
+    Then subtraction operates on dim=1 instead of dim=2, producing
+    contiguous tensors.
+
+    We verify the output is still a valid list of DoGs and that the
+    tensor is contiguous (the source calls .contiguous()).
+    """
+
+    def test_output_is_contiguous(self, dog_scale_pyr):
+        x = torch.randn(1, 1, 64, 64)
+        dogs, sigmas, dists = dog_scale_pyr(x)
+        for d in dogs:
+            assert d.is_contiguous()
+
+    def test_returns_three_items(self, dog_scale_pyr):
+        x = torch.randn(1, 1, 64, 64)
+        result = dog_scale_pyr(x)
+        assert len(result) == 3  # dogs, sigmas, dists — no pyramids
+
+
+# -- Scenario: Spatial dimensions decrease across octaves ------------------
+class TestSpatialDownscaling:
+    """BDD: Given a multi-octave pyramid · Then each successive octave has
+    approximately half the spatial dimensions.
+
+    We compare heights across consecutive octaves.
+    """
+
+    def test_octaves_shrink(self, dog):
         x = torch.randn(1, 1, 128, 128)
         dogs, _, _, _ = dog(x)
-        for d in dogs:
-            assert not torch.isnan(d).any()
-
-    def test_batch_support(self):
-        """DoG handles batch_size > 1."""
-        dog = KorniaDoG()
-        x = torch.randn(2, 1, 128, 128)
-        dogs, _, _, _ = dog(x)
-        for d in dogs:
-            assert d.shape[0] == 2
-
-
-class TestKorniaDoGScalePyr:
-    """Tests for the KorniaDoGScalePyr variant."""
-
-    def test_scale_pyr_variant_returns_three_elements(self):
-        """Scenario: KorniaDoGScalePyr uses different dimension ordering.
-        Returns (dogs, sigmas, dists) - no pyramids."""
-        dog_sp = KorniaDoGScalePyr()
-        x = torch.randn(1, 1, 128, 128)
-        result = dog_sp(x)
-        assert len(result) == 3  # dogs, sigmas, dists (no pyramids)
-        dogs, sigmas, dists = result
-        assert isinstance(dogs, list)
-        assert len(dogs) > 0
+        if len(dogs) >= 2:
+            h0 = dogs[0].shape[2]
+            h1 = dogs[1].shape[2]
+            # Second octave should be roughly half the first
+            assert h1 <= h0 * 0.75

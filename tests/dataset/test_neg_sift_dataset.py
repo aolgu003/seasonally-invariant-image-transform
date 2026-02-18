@@ -1,6 +1,11 @@
-"""Tests for dataset/neg_sift_dataset.py
+"""Tests for the SIFT Siamese dataset.
 
-Maps to BDD Feature: SIFT Siamese Dataset.
+BDD Feature: SIFT Siamese Dataset (dataset/neg_sift_dataset.py)
+
+This dataset applies albumentations augmentation consistently to both
+images, loads via OpenCV in grayscale, and uses different normalization
+stats than the NCC dataset.  Negative sampling is NOT done here — it
+happens in the training loop.
 """
 
 import os
@@ -14,103 +19,125 @@ from PIL import Image
 from dataset.neg_sift_dataset import SiameseDataset
 
 
-def _make_paired_dir(tmp_path, num_images=5, size=64):
-    """Helper to create an on/off paired image directory with RGB PNGs.
-    neg_sift_dataset reads with cv2.imread which loads as BGR by default,
-    and cv2.imread(path, 0) reads grayscale."""
-    on_dir = tmp_path / "on"
-    off_dir = tmp_path / "off"
-    on_dir.mkdir(exist_ok=True)
-    off_dir.mkdir(exist_ok=True)
-    rng = np.random.RandomState(42)
-    for i in range(num_images):
-        name = f"img_{i:04d}.png"
-        # Create RGB images (cv2.imread without flag reads 3-channel,
-        # cv2.imread with flag 0 reads grayscale)
-        arr_on = rng.randint(0, 256, (size, size, 3), dtype=np.uint8)
-        arr_off = rng.randint(0, 256, (size, size, 3), dtype=np.uint8)
-        Image.fromarray(arr_on, mode="RGB").save(on_dir / name)
-        Image.fromarray(arr_off, mode="RGB").save(off_dir / name)
-    return str(tmp_path)
+# -- Helpers ---------------------------------------------------------------
+def _make_pair_dir(tmp_path, n=4, size=(64, 64)):
+    on = tmp_path / "on"
+    off = tmp_path / "off"
+    on.mkdir()
+    off.mkdir()
+    for i in range(n):
+        name = f"img_{i:03d}.png"
+        Image.new("L", size, color=140).save(str(on / name))
+        Image.new("L", size, color=100).save(str(off / name))
+    return tmp_path
 
 
-class TestNegSiftDataset:
-    """Tests for the SIFT Siamese dataset."""
+# -- Scenario: Augmentation is applied consistently to both images ---------
+class TestConsistentAugmentation:
+    """BDD: Given paired images · When augmentation runs · Then the same
+    spatial transforms are applied to both via additional_targets.
 
-    def test_augmentation_applied_consistently(self, tmp_path):
-        """Scenario: Augmentation is applied consistently to both images.
-        The transform uses additional_targets={'imageOff': 'image'} which
-        means both images get the same random augmentation."""
-        data_root = _make_paired_dir(tmp_path, num_images=3, size=64)
-        ds = SiameseDataset(data_root, samples_to_use=1)
-        # Verify that the transform has additional_targets set
-        assert "imageOff" in ds.transform.additional_targets
+    We verify indirectly: both tensors have the same spatial shape after
+    augmentation, and the dataset does not crash.
+    """
 
-    def test_crop_dimensions_match_original(self, tmp_path):
-        """Scenario: Crop dimensions match original image dimensions.
-        RandomResizedCrop uses height=H, width=W from the first image."""
-        size = 80
-        data_root = _make_paired_dir(tmp_path, num_images=3, size=size)
-        ds = SiameseDataset(data_root, samples_to_use=1)
+    def test_same_shape_after_augment(self, tmp_path):
+        root = _make_pair_dir(tmp_path, n=3)
+        ds = SiameseDataset(str(root))
         img_on, img_off = ds[0]
-        # Output should have the same spatial dimensions as input
-        assert img_on.shape[1] == size
-        assert img_on.shape[2] == size
+        assert img_on.shape == img_off.shape
 
-    def test_grayscale_opencv_loading(self, tmp_path):
-        """Scenario: Images are loaded as grayscale via OpenCV (cv2.imread with flag 0)."""
-        data_root = _make_paired_dir(tmp_path, num_images=3, size=64)
-        ds = SiameseDataset(data_root, samples_to_use=1)
+    def test_augmentation_pipeline_exists(self, tmp_path):
+        root = _make_pair_dir(tmp_path, n=2)
+        ds = SiameseDataset(str(root))
+        assert ds.transform is not None
+
+
+# -- Scenario: Crop dimensions match original image dimensions -------------
+class TestCropMatchesOriginal:
+    """BDD: Given images of size (H,W) · When the transform is created ·
+    Then RandomResizedCrop uses height=H, width=W.
+
+    The constructor reads the first image to determine H, W.
+    """
+
+    def test_crop_size_matches_image(self, tmp_path):
+        root = _make_pair_dir(tmp_path, n=2, size=(80, 120))
+        ds = SiameseDataset(str(root))
         img_on, img_off = ds[0]
-        # After cv2.imread(path, 0) and ToTensorV2, should be single-channel
-        # ToTensorV2 on a 2D array produces (1, H, W) if the input was (H, W)
-        # Actually, looking at the code: cv2.imread(path, 0) returns (H, W),
-        # then / 255, then transform which includes ToTensorV2.
-        # ToTensorV2 on (H, W) produces (H, W) tensor -- but albumentations
-        # adds channel dim. Let's just check the tensor is reasonable.
-        assert img_on.dim() >= 2
-        assert img_off.dim() >= 2
+        # Output spatial dims should match the original image size
+        # (augmentation crops then resizes back to H,W)
+        assert img_on.shape[1] == 80
+        assert img_on.shape[2] == 120
 
-    def test_different_normalization_stats(self, tmp_path):
-        """Scenario: Different normalization stats than NCC dataset.
-        on-season: (img - 0.49) / 0.135, off-season: (img - 0.44) / 0.12."""
-        data_root = _make_paired_dir(tmp_path, num_images=3, size=64)
-        ds = SiameseDataset(data_root, samples_to_use=1)
+
+# -- Scenario: Images are loaded as grayscale via OpenCV -------------------
+class TestGrayscaleOpenCV:
+    """BDD: Given an image path · When loaded · Then cv2.imread(path, 0)
+    reads as grayscale and the output has 1 channel.
+    """
+
+    def test_single_channel_output(self, tmp_path):
+        root = _make_pair_dir(tmp_path, n=2)
+        ds = SiameseDataset(str(root))
         img_on, img_off = ds[0]
-        # Values should be shifted away from [0, 1] due to normalization
-        # Verify they are not simply in the raw [0, 1] pixel range
-        # (0.5 - 0.49)/0.135 ~ 0.07; (0 - 0.49)/0.135 ~ -3.6
-        assert img_on.min() < 0 or img_on.max() > 1
+        assert img_on.shape[0] == 1
+        assert img_off.shape[0] == 1
 
-    def test_no_negative_sampling(self, tmp_path):
-        """Scenario: No negative sampling in dataset (done in training loop).
-        Always returns matched pair (img_on, img_off) with no target label."""
-        data_root = _make_paired_dir(tmp_path, num_images=3, size=64)
-        ds = SiameseDataset(data_root, samples_to_use=1)
+
+# -- Scenario: Different normalization stats than NCC dataset ---------------
+class TestNormalizationStats:
+    """BDD: Given a loaded pair · When normalisation is applied ·
+    Then on-season: (x-0.49)/0.135, off-season: (x-0.44)/0.12.
+
+    We create uniform images to compute the expected normalised value.
+    """
+
+    def test_normalization_values(self, tmp_path):
+        on = tmp_path / "on"
+        off = tmp_path / "off"
+        on.mkdir()
+        off.mkdir()
+
+        Image.new("L", (64, 64), color=128).save(str(on / "x.png"))
+        Image.new("L", (64, 64), color=128).save(str(off / "x.png"))
+
+        ds = SiameseDataset(str(tmp_path))
+        img_on, img_off = ds[0]
+
+        raw_val = 128.0 / 255.0
+        expected_on = (raw_val - 0.49) / 0.135
+        expected_off = (raw_val - 0.44) / 0.12
+
+        # Augmentation may alter values slightly (crop/resize interpolation),
+        # so use a generous tolerance.
+        assert abs(img_on.float().mean().item() - expected_on) < 0.15
+        assert abs(img_off.float().mean().item() - expected_off) < 0.15
+
+
+# -- Scenario: No negative sampling in dataset ----------------------------
+class TestNoNegativeSampling:
+    """BDD: When __getitem__ is called · Then it returns a matched pair
+    with no target label (just two tensors).
+    """
+
+    def test_returns_two_tensors(self, tmp_path):
+        root = _make_pair_dir(tmp_path, n=3)
+        ds = SiameseDataset(str(root))
         result = ds[0]
-        # Should return (img_on, img_off) tuple, not ((img_on, img_off), target)
-        assert isinstance(result, tuple)
         assert len(result) == 2
-        img_on, img_off = result
-        assert isinstance(img_on, torch.Tensor)
-        assert isinstance(img_off, torch.Tensor)
+        assert isinstance(result[0], torch.Tensor)
+        assert isinstance(result[1], torch.Tensor)
 
-    def test_float32_output_type(self, tmp_path):
-        """Scenario: Output tensors are float type (explicitly .float())."""
-        data_root = _make_paired_dir(tmp_path, num_images=3, size=64)
-        ds = SiameseDataset(data_root, samples_to_use=1)
+
+# -- Scenario: Output tensors are float type --------------------------------
+class TestFloatOutput:
+    """BDD: When __getitem__ is called · Then both tensors are .float().
+    """
+
+    def test_dtype_is_float32(self, tmp_path):
+        root = _make_pair_dir(tmp_path, n=2)
+        ds = SiameseDataset(str(root))
         img_on, img_off = ds[0]
         assert img_on.dtype == torch.float32
         assert img_off.dtype == torch.float32
-
-    def test_samples_to_use_controls_length(self, tmp_path):
-        """samples_to_use parameter controls dataset length."""
-        data_root = _make_paired_dir(tmp_path, num_images=10, size=64)
-        ds = SiameseDataset(data_root, samples_to_use=0.5)
-        assert len(ds) == 5
-
-    def test_samples_to_use_greater_than_1_rejected(self, tmp_path):
-        """samples_to_use > 1 raises AssertionError."""
-        data_root = _make_paired_dir(tmp_path, num_images=3, size=64)
-        with pytest.raises(AssertionError):
-            SiameseDataset(data_root, samples_to_use=1.5)

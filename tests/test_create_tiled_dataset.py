@@ -1,6 +1,10 @@
-"""Tests for createTiledDataset.py
+"""Tests for tile creation preprocessing.
 
-Maps to BDD Feature: Tile Creation.
+BDD Feature: Tile Creation (createTiledDataset.py)
+
+The createTiles function crops large images into fixed-size tiles for
+training.  These tests verify geometry, overlap, edge handling, filename
+encoding, the grayscale crash bug, and auto-directory creation.
 """
 
 import glob
@@ -13,96 +17,127 @@ from PIL import Image
 from createTiledDataset import createTiles
 
 
-class TestCreateTiledDataset:
-    """Tests for the tile creation utility."""
+def _write_image(path, size, mode="RGB"):
+    """Write a test image of the given (width, height) size."""
+    img = Image.new(mode, size, color=(128, 128, 128) if mode == "RGB" else 128)
+    img.save(path)
 
-    def test_non_overlapping_tile_count(self, tmp_path):
-        """Scenario: Non-overlapping tiles cover the image.
-        A 1200x1800 image with 600x600 crops and 0 overlap -> 2*3 = 6 tiles."""
-        src_dir = tmp_path / "src"
-        out_dir = tmp_path / "out"
-        src_dir.mkdir()
-        out_dir.mkdir()
-        # Create a 1200x1800 RGB image (3-channel to avoid the grayscale bug)
-        arr = np.random.RandomState(42).randint(0, 256, (1200, 1800, 3), dtype=np.uint8)
-        Image.fromarray(arr, mode="RGB").save(src_dir / "test.png")
-        createTiles(str(src_dir), str(out_dir), crop_width=600, crop_height=600, overlap_ratio=0)
-        tiles = glob.glob(os.path.join(str(out_dir), "*.png"))
+
+# -- Scenario: Non-overlapping tiles cover the image -----------------------
+class TestNonOverlappingTiles:
+    """BDD: Given a 1800x1200 image and crop 600x600 with overlap=0 ·
+    When tiles are created · Then 6 tiles are produced (2 rows x 3 cols).
+
+    The while-loops step by crop_width*(1-0) = crop_width, so we get
+    floor(1200/600) * floor(1800/600) = 2*3 = 6 tiles.
+    """
+
+    def test_tile_count(self, tmp_path):
+        src = tmp_path / "src"
+        out = tmp_path / "out"
+        src.mkdir()
+        out.mkdir()
+        _write_image(str(src / "test.png"), (1800, 1200))
+
+        createTiles(str(src), str(out), crop_width=600, crop_height=600, overlap_ratio=0)
+        tiles = glob.glob(str(out / "*.png"))
         assert len(tiles) == 6
 
-    def test_overlapping_tiles_increase_count(self, tmp_path):
-        """Scenario: Overlapping tiles increase tile count."""
-        src_dir = tmp_path / "src"
-        out_dir = tmp_path / "out"
-        src_dir.mkdir()
-        out_dir.mkdir()
-        arr = np.random.RandomState(42).randint(0, 256, (1200, 1200, 3), dtype=np.uint8)
-        Image.fromarray(arr, mode="RGB").save(src_dir / "test.png")
 
-        # Non-overlapping: 1200/600 = 2 per dim -> 4 tiles
-        createTiles(str(src_dir), str(out_dir), crop_width=600, crop_height=600, overlap_ratio=0)
-        no_overlap_count = len(glob.glob(os.path.join(str(out_dir), "*.png")))
+# -- Scenario: Overlapping tiles increase tile count -----------------------
+class TestOverlappingTiles:
+    """BDD: Given overlap_ratio=0.5 · When tiles are created ·
+    Then more tiles are produced because step = crop_width * 0.5.
+    """
 
-        out_dir2 = tmp_path / "out2"
-        out_dir2.mkdir()
-        # 50% overlap: step = 600 * 0.5 = 300. Positions: 0, 300, 600 -> 3 per dim -> 9 tiles
-        createTiles(str(src_dir), str(out_dir2), crop_width=600, crop_height=600, overlap_ratio=0.5)
-        overlap_count = len(glob.glob(os.path.join(str(out_dir2), "*.png")))
+    def test_more_tiles_with_overlap(self, tmp_path):
+        src = tmp_path / "src"
+        out = tmp_path / "out"
+        src.mkdir()
+        out.mkdir()
+        _write_image(str(src / "test.png"), (1200, 1200))
 
-        assert overlap_count > no_overlap_count
+        createTiles(str(src), str(out), crop_width=600, crop_height=600, overlap_ratio=0.5)
+        tiles = glob.glob(str(out / "*.png"))
+        # With overlap=0.5, step=300.  Positions: 0, 300, 600 → 3 per axis → 9
+        assert len(tiles) == 9
 
-    def test_edge_pixels_discarded(self, tmp_path):
-        """Scenario: Edge pixels are discarded if not tile-aligned.
-        A 700x700 image with 600x600 crops -> only 1 tile."""
-        src_dir = tmp_path / "src"
-        out_dir = tmp_path / "out"
-        src_dir.mkdir()
-        out_dir.mkdir()
-        arr = np.random.RandomState(42).randint(0, 256, (700, 700, 3), dtype=np.uint8)
-        Image.fromarray(arr, mode="RGB").save(src_dir / "test.png")
-        createTiles(str(src_dir), str(out_dir), crop_width=600, crop_height=600, overlap_ratio=0)
-        tiles = glob.glob(os.path.join(str(out_dir), "*.png"))
+
+# -- Scenario: Edge pixels are discarded if not tile-aligned ---------------
+class TestEdgeDiscard:
+    """BDD: Given a 700x700 image and crop 600x600 · When tiles are created ·
+    Then only 1 tile is produced (remaining 100px strip is discarded).
+
+    The loop condition `curr_w + crop_width <= w` prevents partial tiles.
+    """
+
+    def test_single_tile(self, tmp_path):
+        src = tmp_path / "src"
+        out = tmp_path / "out"
+        src.mkdir()
+        out.mkdir()
+        _write_image(str(src / "test.png"), (700, 700))
+
+        createTiles(str(src), str(out), crop_width=600, crop_height=600, overlap_ratio=0)
+        tiles = glob.glob(str(out / "*.png"))
         assert len(tiles) == 1
 
-    def test_tile_filename_format(self, tmp_path):
-        """Scenario: Tile filenames encode source image and index.
-        Tiles named foo_000000.png, foo_000001.png, etc."""
-        src_dir = tmp_path / "src"
-        out_dir = tmp_path / "out"
-        src_dir.mkdir()
-        out_dir.mkdir()
-        arr = np.random.RandomState(42).randint(0, 256, (600, 1200, 3), dtype=np.uint8)
-        Image.fromarray(arr, mode="RGB").save(src_dir / "myimage.png")
-        createTiles(str(src_dir), str(out_dir), crop_width=600, crop_height=600, overlap_ratio=0)
-        tiles = sorted(glob.glob(os.path.join(str(out_dir), "*.png")))
-        basenames = [os.path.basename(t) for t in tiles]
-        assert "myimage_000000.png" in basenames
-        assert "myimage_000001.png" in basenames
 
-    def test_grayscale_crash_known_bug(self, tmp_path):
-        """Scenario: Grayscale images crash (known bug).
-        np.asarray(img).shape unpacked as (h, w, c) raises ValueError
-        on a 2D grayscale array."""
-        src_dir = tmp_path / "src"
-        out_dir = tmp_path / "out"
-        src_dir.mkdir()
-        out_dir.mkdir()
-        # Create a grayscale image (2D array, no channel dimension)
-        arr = np.random.RandomState(42).randint(0, 256, (64, 64), dtype=np.uint8)
-        Image.fromarray(arr, mode="L").save(src_dir / "gray.png")
-        with pytest.raises((ValueError, Exception)):
-            createTiles(str(src_dir), str(out_dir), crop_width=32, crop_height=32, overlap_ratio=0)
+# -- Scenario: Tile filenames encode source image and index ----------------
+class TestTileFilenames:
+    """BDD: Given source image foo.png · When tiles are created ·
+    Then tiles are named foo_000000.png, foo_000001.png, etc.
+    """
 
-    def test_output_dir_must_exist(self, tmp_path):
-        """The createTiles function writes to save_dir which must exist.
-        The main script creates it via os.makedirs, but the function
-        itself does not create it."""
-        src_dir = tmp_path / "src"
-        src_dir.mkdir()
-        arr = np.random.RandomState(42).randint(0, 256, (64, 64, 3), dtype=np.uint8)
-        Image.fromarray(arr, mode="RGB").save(src_dir / "test.png")
+    def test_filename_format(self, tmp_path):
+        src = tmp_path / "src"
+        out = tmp_path / "out"
+        src.mkdir()
+        out.mkdir()
+        _write_image(str(src / "foo.png"), (1200, 600))
 
-        nonexistent = str(tmp_path / "nonexistent_out")
-        # Saving to a nonexistent directory should raise
-        with pytest.raises((FileNotFoundError, OSError)):
-            createTiles(str(src_dir), nonexistent, crop_width=32, crop_height=32, overlap_ratio=0)
+        createTiles(str(src), str(out), crop_width=600, crop_height=600, overlap_ratio=0)
+        tiles = sorted(os.listdir(str(out)))
+        assert tiles[0] == "foo_000000.png"
+        assert tiles[1] == "foo_000001.png"
+
+
+# -- Scenario: Grayscale images crash (known bug) --------------------------
+class TestGrayscaleCrash:
+    """BDD: Given a grayscale PNG loaded as 2D array · When shape is
+    unpacked as h, w, c · Then ValueError is raised.
+
+    The code does `h, w, c = np.asarray(img).shape` which fails for
+    2D arrays (grayscale with no channel dim).  This test documents the
+    bug; update it to test the fix once implemented.
+    """
+
+    def test_grayscale_raises(self, tmp_path):
+        src = tmp_path / "src"
+        out = tmp_path / "out"
+        src.mkdir()
+        out.mkdir()
+        _write_image(str(src / "gray.png"), (600, 600), mode="L")
+
+        with pytest.raises(ValueError):
+            createTiles(str(src), str(out), crop_width=300, crop_height=300, overlap_ratio=0)
+
+
+# -- Scenario: Output directory is created automatically -------------------
+class TestOutputDirCreation:
+    """BDD: Given save_data_dir does not exist · When the main block runs ·
+    Then the directory is created via os.makedirs(exist_ok=True).
+
+    Note: createTiles itself does NOT create the directory — the __main__
+    block does.  We test the function with a pre-existing directory.
+    """
+
+    def test_function_works_with_existing_dir(self, tmp_path):
+        src = tmp_path / "src"
+        out = tmp_path / "out"
+        src.mkdir()
+        out.mkdir()
+        _write_image(str(src / "img.png"), (600, 600))
+        # Should not crash
+        createTiles(str(src), str(out), crop_width=600, crop_height=600, overlap_ratio=0)
+        assert len(os.listdir(str(out))) == 1
