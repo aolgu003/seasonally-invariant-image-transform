@@ -1,8 +1,7 @@
 name: Python CI
 
 on:
-  push:
-    branches: [ main, develop ]
+  push: 
   pull_request:
     branches: [ main ]
 
