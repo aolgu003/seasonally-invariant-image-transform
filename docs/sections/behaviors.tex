@@ -1,0 +1,81 @@
+\section{Behaviors}
+\label{sec:behaviors}
+\index{behaviors}
+
+This section documents verified system behaviors, each corresponding to a pytest
+test class in \texttt{tests/}. Scenarios follow Given/When/Then (GWT) format.
+Each entry references the GitHub issue that introduced the behavior.
+
+% -----------------------------------------------------------------------
+% Template for adding a new behavior block:
+%
+% \subsection{<Behavior Area>}
+% \label{subsec:behavior-<slug>}
+% \index{behavior!<slug>}
+%
+% \textbf{Issue:} \href{<issue-url>}{#<number> — <title>}\\
+% \textbf{Test class:} \texttt{tests/<path>/test_<name>.py::<ClassName>}
+%
+% \begin{description}
+%   \item[Scenario: <name>]
+%     \textit{Given} <precondition>;
+%     \textit{When} <action>;
+%     \textit{Then} <outcome>.
+% \end{description}
+% -----------------------------------------------------------------------
+
+\subsection{U-Net Forward Pass}
+\label{subsec:behavior-unet}
+\index{behavior!unet}
+
+\textbf{Test class:} \texttt{tests/model/test\_unet.py::TestUNetForwardPass}
+
+\begin{description}
+  \item[Scenario: output shape matches input]
+    \textit{Given} a U-Net with 1 input channel and 1 output channel;
+    \textit{When} a single-channel image tensor of shape $(B, 1, H, W)$ is passed through;
+    \textit{Then} the output tensor has shape $(B, 1, H, W)$.
+
+  \item[Scenario: sigmoid output range]
+    \textit{Given} a U-Net with sigmoid activation;
+    \textit{When} any real-valued input tensor is passed through;
+    \textit{Then} all output values are in $[0, 1]$.
+\end{description}
+
+\subsection{NCC Correlator}
+\label{subsec:behavior-correlator}
+\index{behavior!correlator}
+
+\textbf{Test class:} \texttt{tests/model/test\_correlator.py::TestCorrelator}
+
+\begin{description}
+  \item[Scenario: score range]
+    \textit{Given} two arbitrary feature maps;
+    \textit{When} NCC is computed;
+    \textit{Then} the resulting score is in $[-1, 1]$.
+
+  \item[Scenario: identical inputs score near 1]
+    \textit{Given} two identical feature maps;
+    \textit{When} NCC is computed;
+    \textit{Then} the score is close to $1.0$.
+\end{description}
+
+\subsection{Siamese NCC Dataset}
+\label{subsec:behavior-neg-dataset}
+\index{behavior!neg\_dataset}
+
+\textbf{Test class:} \texttt{tests/dataset/test\_neg\_dataset.py::TestNegDataset}
+
+\begin{description}
+  \item[Scenario: negative sampling ratio]
+    \textit{Given} a dataset with paired on/off images;
+    \textit{When} a large number of samples are drawn;
+    \textit{Then} approximately 50\% carry a negative (mismatch) label.
+
+  \item[Scenario: normalization applied]
+    \textit{Given} a dataset with configured mean and std;
+    \textit{When} an image is loaded;
+    \textit{Then} the returned tensor has approximately zero mean and unit variance.
+\end{description}
+
+% Add new behavior subsections here as features are implemented.

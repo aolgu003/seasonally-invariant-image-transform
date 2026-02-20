@@ -1,0 +1,85 @@
+\section{Architecture}
+\label{sec:architecture}
+\index{architecture}
+
+\subsection{Model: U-Net}
+\label{subsec:unet}
+\index{U-Net}
+
+The core model is a U-Net with one grayscale input channel and one output channel.
+The output activation is sigmoid, constraining predictions to $[0, 1]$.
+
+\begin{description}
+  \item[Encoder] 5 levels: $64 \to 128 \to 256 \to 512 \to 512$ channels.
+    Each level uses double convolution (DoubleConv) followed by max-pooling.
+  \item[Bottleneck] 512-channel double convolution.
+  \item[Decoder] 4 upsampling levels with skip connections from the encoder.
+    Bilinear upsampling by default; transposed convolution available.
+  \item[Output] $1\times1$ convolution to single channel, followed by sigmoid.
+\end{description}
+
+Based on \href{https://github.com/milesial/Pytorch-UNet}{milesial/Pytorch-UNet}.
+
+\subsection{Correlator}
+\label{subsec:correlator}
+\index{correlator}
+
+\texttt{model/correlator.py} implements a normalized cross-correlation (NCC) layer.
+Given two feature maps, it computes a scalar similarity score in $[-1, 1]$.
+
+\textbf{Known issue:} the current implementation adds \texttt{torch.randn} noise during
+std normalization, making inference non-deterministic (see \S\ref{subsec:known-issues}).
+
+\subsection{DoG Pyramid}
+\label{subsec:dog}
+\index{DoG pyramid}
+
+\texttt{model/kornia\_dog.py} implements a Difference-of-Gaussians multi-scale pyramid
+used in the SIFT training loss. Parameters (n\_levels, init\_sigma, min\_size) are
+currently hardcoded.
+
+\subsection{SIFT Descriptor}
+\label{subsec:sift}
+\index{SIFT}
+
+\texttt{model/kornia\_sift.py} wraps Kornia's SIFT implementation to extract 128-D
+descriptors. Currently asserts single-channel input (\texttt{assert(PC == 1)}).
+
+\subsection{Training Pipeline}
+\label{subsec:training}
+
+\begin{enumerate}
+  \item Tile large orthorectified images into fixed-size patches via
+    \texttt{createTiledDataset.py}.
+  \item Load Siamese pairs (50\% negative / mismatched samples) from
+    \texttt{on/} and \texttt{off/} directories.
+  \item Forward pass: both images through U-Net to produce transformed outputs.
+  \item Compute loss (NCC or SIFT).
+  \item Backpropagate; update with Adam ($\mathrm{lr}=10^{-5}$) and
+    ExponentialLR scheduler.
+  \item Save best weights to \texttt{experiments/\{exp\_name\}/weights/}.
+\end{enumerate}
+
+\subsection{Planned Architecture Changes}
+\label{subsec:planned-arch}
+
+The following changes are planned as part of the multi-modal extension roadmap:
+
+\begin{itemize}
+  \item \textbf{Configurable U-Net channels} — read \texttt{n\_channels}/\texttt{n\_classes}
+    from YAML config instead of hardcoding to 1.
+  \item \textbf{Optional sigmoid} — linear output for modalities with different dynamic ranges
+    (e.g.\ thermal).
+  \item \textbf{Configurable correlator epsilon} — larger epsilon needed for noisy thermal inputs.
+  \item \textbf{Configurable DoG/SIFT params} — per-modality scale space and feature settings.
+  \item \textbf{Manifest-driven data loading} — replace \texttt{on/}/\texttt{off/} directory
+    convention with explicit JSON pair manifests.
+\end{itemize}
+
+% Diagrams rendered from docs/diagrams/*.mermaid via mmdc
+% \begin{figure}[h]
+%   \centering
+%   \includegraphics[width=0.9\textwidth]{diagrams/siamese-ncc.png}
+%   \caption{NCC training pipeline overview.}
+%   \label{fig:siamese-ncc}
+% \end{figure}

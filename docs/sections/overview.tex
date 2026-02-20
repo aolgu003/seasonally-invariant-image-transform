@@ -1,0 +1,90 @@
+\section{Project Overview}
+\label{sec:overview}
+
+This repository contains the official training code for the \textbf{Science Robotics} paper:
+\textit{``A seasonally invariant deep transform for visual terrain-relative navigation''}
+(Fragoso et al., 2021).
+
+The system trains deep neural networks (U-Net) to produce image transformations that are
+invariant to seasonal appearance changes (e.g., summer vs.\ winter), enabling robust visual
+terrain-relative navigation for robots.
+
+\subsection{Scope Extension}
+
+The project is being extended to support multi-modal image matching across:
+\begin{itemize}
+  \item Aerial thermal image to satellite image matching
+  \item Aerial grayscale image to satellite image matching
+  \item Frame-to-frame thermal video matching (temporal)
+  \item Frame-to-frame visible video matching (temporal)
+\end{itemize}
+
+\subsection{Training Approaches}
+
+Two training approaches are implemented:
+\begin{description}
+  \item[NCC-based (\texttt{siamese-ncc.py})] Optimizes for normalized cross-correlation
+    registration. Loss is MSE between predicted NCC score and binary match label.
+  \item[SIFT-based (\texttt{siamese-sift.py})] Optimizes for SIFT feature matching via a
+    weighted combination of DoG pyramid correlation loss and SIFT descriptor distance loss:
+    $\mathcal{L} = \gamma \cdot \mathcal{L}_\text{SIFT} + \zeta \cdot \mathcal{L}_\text{pyramid}$.
+\end{description}
+
+\subsection{Tech Stack}
+
+\begin{tabular}{ll}
+\toprule
+\textbf{Component} & \textbf{Library / Version} \\
+\midrule
+Language        & Python 3.11 \\
+Deep Learning   & PyTorch 1.11.0, PyTorch Lightning 1.7.7 \\
+Computer Vision & Kornia 0.6.6, OpenCV 4.5.5.64 \\
+Augmentation    & Albumentations 1.1.0 \\
+Image I/O       & Pillow, imageio, rasterio \\
+Visualization   & TensorBoard, matplotlib \\
+Scientific      & NumPy, SciPy, scikit-image \\
+Testing         & pytest \\
+Linting         & ruff, black \\
+\bottomrule
+\end{tabular}
+
+\subsection{Repository Layout}
+
+\begin{lstlisting}
+.
++-- siamese-ncc.py          # NCC training entry point
++-- siamese-sift.py         # SIFT training entry point
++-- siamese-inference.py    # Inference entry point
++-- createTiledDataset.py   # Preprocessing: crop images into tiles
++-- model/
+|   +-- unet.py             # U-Net architecture
+|   +-- unet_parts.py       # U-Net building blocks
+|   +-- correlator.py       # Normalized cross-correlation layer
+|   +-- kornia_dog.py       # DoG multi-scale pyramid
+|   +-- kornia_sift.py      # SIFT descriptor extraction
++-- dataset/
+|   +-- neg_dataset.py      # Siamese dataset for NCC training
+|   +-- neg_sift_dataset.py # Siamese dataset for SIFT training
+|   +-- inference_dataset.py
++-- utils/
+|   +-- helper.py           # Normer, tensorboard, pyramid loss
++-- tests/                  # pytest test suite
++-- docs/                   # This documentation
++-- configs/                # YAML experiment configs (planned)
+\end{lstlisting}
+
+\subsection{Known Issues}
+\label{subsec:known-issues}
+\index{known issues}
+
+\begin{description}
+  \item[\texttt{siamese-sift.py:69}] \texttt{input1} and \texttt{input2} are both assigned
+    from \texttt{data[0]}, so \texttt{data[1]} (the off-season image) is never used during
+    SIFT training. Likely a bug.
+  \item[\texttt{createTiledDataset.py:17}] \texttt{h, w, c = np.asarray(img).shape} assumes
+    a 3-D array and crashes on grayscale PNGs loaded as 2-D.
+  \item[\texttt{correlator.py:20}] Random noise (\texttt{torch.randn}) is added during
+    normalization, introducing non-determinism at inference time.
+  \item[Hardcoded normalization stats] Differ between NCC dataset
+    ($\sigma=0.12/0.10$) and SIFT dataset ($\sigma=0.135/0.12$) with no documented rationale.
+\end{description}

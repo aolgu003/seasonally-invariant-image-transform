@@ -1,0 +1,74 @@
+\section{Key Algorithms}
+\label{sec:algorithms}
+\index{algorithms}
+
+% -----------------------------------------------------------------------
+% Template for adding a new algorithm block:
+%
+% \subsection{<Algorithm Name>}
+% \label{subsec:alg-<slug>}
+% \index{algorithm!<slug>}
+%
+% Short description. Reference the source file and line numbers.
+%
+% \begin{equation}
+%   \mathcal{L} = ...
+% \end{equation}
+% -----------------------------------------------------------------------
+
+\subsection{Normalized Cross-Correlation (NCC) Loss}
+\label{subsec:alg-ncc}
+\index{algorithm!NCC loss}
+
+Source: \texttt{model/correlator.py}, \texttt{siamese-ncc.py}.
+
+Given transformed images $\hat{x}_1$ and $\hat{x}_2$ from the U-Net, the NCC score is:
+\begin{equation}
+  \mathrm{NCC}(\hat{x}_1, \hat{x}_2)
+    = \frac{\sum_{i}(\hat{x}_{1,i} - \bar{x}_1)(\hat{x}_{2,i} - \bar{x}_2)}
+           {\sqrt{\sum_i(\hat{x}_{1,i} - \bar{x}_1)^2 \cdot \sum_i(\hat{x}_{2,i} - \bar{x}_2)^2}}
+\end{equation}
+
+The training loss is MSE between the predicted NCC score and the binary label
+$y \in \{0, 1\}$ (1 = matching pair, 0 = non-matching pair):
+\begin{equation}
+  \mathcal{L}_\text{NCC} = \bigl(\mathrm{NCC}(\hat{x}_1, \hat{x}_2) - y\bigr)^2
+\end{equation}
+
+\subsection{SIFT Combined Loss}
+\label{subsec:alg-sift}
+\index{algorithm!SIFT loss}
+
+Source: \texttt{siamese-sift.py}, \texttt{model/kornia\_dog.py}, \texttt{model/kornia\_sift.py}.
+
+The SIFT training loss is a weighted sum of two terms:
+\begin{equation}
+  \mathcal{L}_\text{SIFT} = \gamma \cdot \mathcal{L}_\text{detector}
+                           + \zeta \cdot \mathcal{L}_\text{descriptor}
+\end{equation}
+
+where:
+\begin{itemize}
+  \item $\mathcal{L}_\text{detector}$ — DoG pyramid correlation loss encouraging
+    both images to produce similar scale-space responses.
+  \item $\mathcal{L}_\text{descriptor}$ — distance between SIFT descriptors extracted
+    from corresponding keypoints.
+  \item $\gamma$ — detector loss weight (CLI: \texttt{--gamma}, default 1).
+  \item $\zeta$ — descriptor loss weight (CLI: \texttt{--zeta}, default 10).
+\end{itemize}
+
+\subsection{Image Tiling}
+\label{subsec:alg-tiling}
+\index{algorithm!tiling}
+
+Source: \texttt{createTiledDataset.py}.
+
+Large images are tiled into non-overlapping patches of fixed size
+$(W_\text{crop}, H_\text{crop})$.
+The overlap ratio parameter controls the stride between tiles:
+\begin{equation}
+  \text{stride} = \lfloor W_\text{crop} \cdot (1 - r_\text{overlap}) \rfloor
+\end{equation}
+where $r_\text{overlap} = 0$ gives non-overlapping tiles.
+
+% Add new algorithm subsections here as features are implemented.
