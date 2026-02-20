@@ -62,7 +62,8 @@ class TestCropMatchesOriginal:
     """
 
     def test_crop_size_matches_image(self, tmp_path):
-        root = _make_pair_dir(tmp_path, n=2, size=(80, 120))
+        # PIL Image.new takes (width, height), so (120, 80) gives H=80, W=120 in array terms
+        root = _make_pair_dir(tmp_path, n=2, size=(120, 80))
         ds = SiameseDataset(str(root))
         img_on, img_off = ds[0]
         # Output spatial dims should match the original image size

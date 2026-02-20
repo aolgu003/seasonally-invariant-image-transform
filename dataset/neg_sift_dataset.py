@@ -30,11 +30,11 @@ class SiameseDataset(Dataset):
         print('{} total images to train over (negatives ratio: {})'.format(self.length, negative_weighting))
 
         self.transform = A.Compose([
-            A.RandomResizedCrop(height=H, width=W, scale=(0.75, 1.5), ratio=(1, 1), interpolation=cv2.INTER_CUBIC, always_apply=True),
+            A.RandomResizedCrop(size=(H, W), scale=(0.75, 1.0), ratio=(1, 1), interpolation=cv2.INTER_CUBIC, p=1.0),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
-            A.RandomRotate90(p=0.5), 
-            ToTensorV2(),], 
+            A.RandomRotate90(p=0.5),
+            ToTensorV2(),],
         additional_targets={'imageOff':'image'})
 
     def __getitem__(self, index):
